@@ -1,0 +1,96 @@
+registries:
+  - name: registry-1
+    url: url-1
+    source: True
+    untrusted: True
+  - name: registry-2
+    url: url-2
+    untrusted: True
+  - name: registry-3
+    url: url-3
+    untrusted: True
+    # whether containers from that repository should be published
+    source: True
+  - name: registry-auth
+    url: url-4
+    credentials:
+      username: username
+      password: password
+
+# the default distribution for images
+distribution: centos
+
+# This allows us to fake release or build number if need be. Mostly used for testing,
+# but can be used in a pinch (for example our current source release is 5.0 but we have
+# to release 5.0.0).
+release_overrides:
+  release: 5.0.0
+
+# Image overrides:
+#
+# Overrides can be used to change the behavior on the per-image basis. This
+# can be used to implement custom tagging for RHEL, select which registries
+# to push images to etc.
+#
+# Currently supported keys are:
+#
+#   - `image_matcher`
+#   - `tag_matcher`
+#   - `registries`
+#   - `release_tags`
+#   - `source_tag`
+#   - `distribution`
+#
+image_overrides:
+  # RHEL images should only be uploaded to the ci-repo:5000 and sandbox
+  - image_matcher: ^.*$
+    tag_matcher: ^rhel-.*$
+    registries:
+      - registry-auth
+    # we can change how the published container is to be tagged.
+    release_tags:
+      # rhel-5.0.0-0.27 and rhel-5.0.0-0.27-ocata
+      - "rhel-{{ release }}-0.{{ build_no }}"
+      - "rhel-{{ release }}-0.{{ build_no }}{{ openstack_release_rhs }}"
+    distribution: rhel
+    source_tag: "{{ distribution_lhs }}{{ openstack_release_lhs }}{{ release }}-{{ build_no }}"
+
+  # contrail-go is pushed with {{ release }}-{{ build_no }}
+  - image_matcher: contrail-go
+    source_tag: "{{ release }}-{{ build_no }}"
+    release_tags:
+      - "latest"
+    registries:
+      - registry-2
+      - registry-auth
+    tag_latest: True
+
+  # newton images should be tagged as 5.0.0-0.27-ocata
+  - image_matcher: "^.*$"
+    tag_matcher: "^newton-.*$"
+    release_tags:
+      - "{{ release }}-0.{{ build_no }}{{ openstack_release_rhs }}"
+
+  # the remainder (ocata images) should be tagged as 5.0.0-0.27, 5.0.0-0.27-ocata and latest
+  - image_matcher: "^.*$"
+    tag_matcher: "^ocata-.*$"
+    release_tags:
+      - "{{ release }}-0.{{ build_no }}{{ openstack_release_rhs }}"
+      - "{{ release }}-0.{{ build_no }}"
+      - "latest"
+
+# rhel_marker and openstack_release have two variants: _lhs and _rhs depending
+# on how they are used:
+#
+# They either end (lhs) or start (rhs) with a hyphen, to make combining them with other
+# parts of the source tag easier.
+
+# WARNING: source tags have wrong release - the micro part is missing.
+# ocata-5.0-27 and newton-5.0-27
+source_tag: "{{ openstack_release_lhs }}{{ release }}-{{ build_no }}"
+
+# The default set of tags to apply to images.
+# XXX(kklimonda): that seems pointless, we override everything.
+release_tags:
+  # 5.0.0-0.27-newton (-ocata is being overridden above)
+  - "{{ release }}-0.{{ build_no }}{{ openstack_release_rhs }}"

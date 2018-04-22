@@ -1,0 +1,5 @@
+docker
+pyyaml
+docker-registry-util
+jinja2
+voluptuous
