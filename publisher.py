@@ -188,7 +188,11 @@ class ReleaseHelper(object):
         self.source_tag_tpl = config['source_tag']
         self.release_tags_tpl = config['release_tags']
         self.distribution = config['distribution']
-        self.release_overrides = config['release_overrides']
+
+        if 'release_overrides' in config:
+            self.release_overrides = config['release_overrides']
+        else:
+            self.release_overrides = {}
 
     def fetch_registry_content(self):
         """Fetch list of repositories from all source registries."""
@@ -201,7 +205,10 @@ class ReleaseHelper(object):
         return self.release_overrides[variable]
 
     def get_release(self):
-        return self._get_release_override("release")
+        try:
+            return self.release_overrides['release']
+        except KeyError:
+            return self.release
 
     def get_build_no(self):
         try:
