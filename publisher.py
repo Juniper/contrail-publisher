@@ -155,6 +155,7 @@ class ReleaseHelper(object):
         parser.add_argument("--verbose", dest="verbose", action="store_true")
         parser.add_argument("--release", dest="release", required=True)
         parser.add_argument("--openstack_release", dest="openstack_release", default="ocata")
+        parser.add_argument("--build-registry", dest="build_registry", default=None)
         parser.add_argument("--build", dest="build_no", required=True)
         parser.add_argument("--dry-run", dest="dry_run", action="store_true")
         parser.add_argument("--config", dest="config", default="publisher.yaml")
@@ -168,6 +169,7 @@ class ReleaseHelper(object):
         self.openstack_release = args.openstack_release
         self.images_filter = args.images_filter
         self.config = args.config
+        self.build_registry = args.build_registry
 
     def configure_logging(self):
         pass
@@ -177,6 +179,8 @@ class ReleaseHelper(object):
             config = yaml.safe_load(fh)
 
         for config_reg in config['registries']:
+            if config_reg['name'] == 'build' and self.build_registry:
+                config_reg['url'] = self.build_registry
             registry = Registry(config=config_reg)
             self.registries[registry.name] = registry
 
