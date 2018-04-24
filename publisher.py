@@ -250,7 +250,7 @@ class ReleaseHelper(object):
                 matcher = candidate["tag_matcher"]
                 if not re.match(matcher, tag):
                     continue
-            self.log.warning("Overrides for %s:%s found.", repo, tag)
+            #self.log.warning("Overrides for %s:%s found.", repo, tag)
             override = candidate
             break
 
@@ -296,8 +296,6 @@ class ReleaseHelper(object):
 
         source_tag = render_tag(source_tag_tpl, source_tag_context)
         release_tags = [render_tag(release_tag, release_tag_context) for release_tag in release_tags_tpl]
-        self.log.warning("image %s, tag: %s, source_tag: %s, release_tags: %s",
-                         repo.name, tag, source_tag, release_tags)
 
         # This method is called for every tag in repository, but we want to process only images that
         # match requested release, build_no and openstack version.
