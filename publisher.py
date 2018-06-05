@@ -132,6 +132,8 @@ class Registry(object):
         self.log.info("Found the following repositories in registry %s:", self.name)
         for repo in catalog['repositories']:
             tags = self.raw_client.get_tags(repo).json()['tags']
+            if tags is None:
+                tags = []
             self.log.debug("\t%s with %s tags", repo, len(tags))
             self.repositories[repo] = Repository(name=repo, registry=self, tags=tags)
             self.log.warning(self.repositories[repo])
