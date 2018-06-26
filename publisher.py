@@ -361,7 +361,7 @@ class ReleaseHelper(object):
 
     def publish_image(self, target: Registry, repository: str, tag: str):
         if self.dry_run:
-            return
+            return True
         for line in target.client.push(repository, tag, stream=True, decode=True):
             if 'error' in line.keys():
                 message = line['errorDetail']['message']
