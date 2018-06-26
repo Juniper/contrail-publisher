@@ -361,13 +361,13 @@ class ReleaseHelper(object):
 
     def publish_image(self, target: Registry, repository: str, tag: str):
         if self.dry_run:
-            return True
+            return
         for line in target.client.push(repository, tag, stream=True, decode=True):
             if 'error' in line.keys():
                 message = line['errorDetail']['message']
                 raise ImagePushError(message=message)
             self.log.debug(line)
-        return True
+        return
 
     def process_images(self):
         """Get a list of images to publish, tag them and push to registries"""
@@ -385,11 +385,14 @@ class ReleaseHelper(object):
                     while retry_count <= self.retry_limit:
                         self.log.info("Pushing %s:%s to %s (%d/%d)", repository, tag, target, retry_count, self.retry_limit)
                         try:
-                            return self.publish_image(target, repository, tag)
+                            self.publish_image(target, repository, tag)
+                            break
                         except ImagePushError as e:
                             self.log.error("%s", e.message)
                             retry_count = retry_count + 1
-                    return False
+                    else:
+                        return False
+        return True
 
 
 def main():
