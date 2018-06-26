@@ -20,6 +20,13 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 ch.setFormatter(formatter)
 LOG.addHandler(ch)
 
+class ImagePushError(Exception):
+    def __init__(self, response=None, message=''):
+        self.response = response
+        self.message = message
+        super(ImagePushError).__init__()
+
+
 class Image(object):
     def __init__(self, repository: 'Repository', tag: str, release_tags: List[str], push_registries: List['Registry']):
         self.repository = repository
@@ -126,7 +133,7 @@ class Registry(object):
     def get_repositories(self) -> None:
         """This method fetches all repositories from the registry."""
 
-        self.log.warning("Fetching repositories for %s", self.name)
+        self.log.info("Fetching repositories for %s", self.name)
 
         catalog = self.raw_client.get_catalog().json()
         self.log.info("Found the following repositories in registry %s:", self.name)
@@ -136,14 +143,11 @@ class Registry(object):
                 tags = []
             self.log.debug("\t%s with %s tags", repo, len(tags))
             self.repositories[repo] = Repository(name=repo, registry=self, tags=tags)
-            self.log.warning(self.repositories[repo])
+            self.log.info(self.repositories[repo])
 
 
 class ReleaseHelper(object):
     def __init__(self):
-        self.log = logging.getLogger("publish.ReleaseHelper")
-        self.log.setLevel(logging.DEBUG)
-
         # command line global arguments
         self.verbose = False
         self.registries : Dict[Registry] = {}
@@ -151,6 +155,7 @@ class ReleaseHelper(object):
         self.image_overrides = {}
         self.source_tag_tpl = ""
         self.release_tags_tpl = {}
+        self.retry_limit = 5
 
     def parse_arguments(self):
         parser = argparse.ArgumentParser()
@@ -162,6 +167,7 @@ class ReleaseHelper(object):
         parser.add_argument("--dry-run", dest="dry_run", action="store_true")
         parser.add_argument("--config", dest="config", default="publisher.yaml")
         parser.add_argument("--filter", dest="images_filter", default=None)
+        parser.add_argument("--retry-limit", dest="retry_limit", default=5)
         args = parser.parse_args()
 
         self.verbose = args.verbose
@@ -172,9 +178,17 @@ class ReleaseHelper(object):
         self.images_filter = args.images_filter
         self.config = args.config
         self.build_registry = args.build_registry
+        self.retry_limit = args.retry_limit
 
     def configure_logging(self):
-        pass
+        self.log = logging.getLogger("publish.ReleaseHelper")
+        if self.verbose:
+            self.log.setLevel(logging.DEBUG)
+        else:
+            self.log.setLevel(logging.INFO)
+        loggingHandler = logging.StreamHandler()
+        loggingHandler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+        self.log.addHandler(loggingHandler)  
 
     def parse_configuration(self):
         with open(self.config) as fh:
@@ -186,15 +200,13 @@ class ReleaseHelper(object):
             registry = Registry(config=config_reg)
             self.registries[registry.name] = registry
 
-        self.image_overrides = config['image_overrides']
         self.source_tag_tpl = config['source_tag']
         self.release_tags_tpl = config['release_tags']
         self.distribution = config['distribution']
 
-        if 'release_overrides' in config:
-            self.release_overrides = config['release_overrides']
-        else:
-            self.release_overrides = {}
+        self.retry_limit = config.get('retry_limit', 5)
+        self.image_overrides = config.get('image_overrides', {})
+        self.release_overrides = config.get('release_overrides', {})
 
     def fetch_registry_content(self):
         """Fetch list of repositories from all source registries."""
@@ -228,7 +240,7 @@ class ReleaseHelper(object):
             for tag in repository.tags:
                 image = self.get_matching_image_from_repository(repository, tag)
                 if image:
-                    self.log.warning("Image %s found", image)
+                    self.log.info("Image %s found", image)
                     images += [image]
 
         return images
@@ -278,7 +290,7 @@ class ReleaseHelper(object):
 
         # image overrides explicitly disabled processing.
         if not registries:
-            self.log.warning("Image %s:%s disabled.", repo, tag)
+            self.log.info("Image %s:%s disabled.", repo, tag)
             return
 
         source_tag_context = {
@@ -340,25 +352,29 @@ class ReleaseHelper(object):
 
         Each `Registry` has its own client so we just access it directly.
         """
-        self.log.warning("Fetching image %s", image)
+        self.log.info("Fetching image %s", image)
         for line in image.repository.registry.client.pull(str(image.repository), image.tag, stream=True, decode=True):
-            self.log.warning(line)
+            self.log.debug(line)
 
     def tag_image(self, image: Image, target_repository: Repository, tag: str):
-        self.log.warning("Tagging %s for %s:%s", image, target_repository, tag)
+        self.log.info("Tagging %s for %s:%s", image, target_repository, tag)
         image.repository.registry.client.tag(str(image), str(target_repository), tag)
 
     def publish_image(self, target: Registry, repository: str, tag: str):
-        self.log.warning("Pushing %s:%s to %s", repository, tag, target)
+        self.log.info("Pushing %s:%s to %s", repository, tag, target)
         if self.dry_run:
             return
         for line in target.client.push(repository, tag, stream=True, decode=True):
-            self.log.warning(line)
+            if 'error' in line.keys():
+               response = int(re.search('\d{3}', line['error'])[0])
+               message = line['errorDetail']['message']
+               raise ImagePushError(response=response, message=message)
+            self.log.debug(line)
 
     def process_images(self):
         """Get a list of images to publish, tag them and push to registries"""
         source_images = self.get_build_images()
-        self.log.warning("Got %s images for publishing. Processing..", len(source_images))
+        self.log.info("Got %s images for publishing. Processing..", len(source_images))
 
         for image in source_images:
             self.fetch_image(image)
@@ -367,7 +383,17 @@ class ReleaseHelper(object):
                 for tag in image.release_tags:
                     repository = "%s/%s" % (target, image.repository.name)
                     self.tag_image(image, repository, tag)
-                    self.publish_image(target, repository, tag)
+                    retry_count = 1
+                    while retry_count <= self.retry_limit:
+                        self.log.info("Pushing image, try %d of %d", retry_count, self.retry_limit)
+                        try:
+                            self.publish_image(target, repository, tag)
+                        except ImagePushError as e:
+                            self.log.error("Response %s while pushing %s:%s!", e.response, repository, tag)
+                            retry_count = retry_count + 1
+                            continue
+                        return True
+                    return False
 
 
 def main():
@@ -377,7 +403,12 @@ def main():
     helper.parse_configuration()
     helper.fetch_registry_content()
 
-    helper.process_images()
+    push_succeeded = helper.process_images()
+    if not push_succeeded:
+        helper.log.error("There were errors while pushing images.")
+        return 1
+    return 0
+        
 
 if __name__ == "__main__":
-    main()
+    exit(main())

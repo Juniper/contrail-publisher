@@ -94,3 +94,7 @@ source_tag: "{{ openstack_release_lhs }}{{ release }}-{{ build_no }}"
 release_tags:
   # 5.0.0-0.27-newton (-ocata is being overridden above)
   - "{{ release }}-0.{{ build_no }}{{ openstack_release_rhs }}"
+
+# This allows us to define retry limit for pushing images. 
+# If the limit is reached for an image, the script will fail.
+retry_limit: 5
