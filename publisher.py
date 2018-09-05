@@ -11,6 +11,8 @@ from requests.auth import HTTPDigestAuth, HTTPBasicAuth
 from docker_registry_util import client
 from typing import Dict, List, Optional
 
+from urllib3.exceptions import ReadTimeoutError
+
 LOG = logging.getLogger("publisher")
 LOG.setLevel(logging.DEBUG)
 ch = logging.StreamHandler()
@@ -362,11 +364,14 @@ class ReleaseHelper(object):
     def publish_image(self, target: Registry, repository: str, tag: str):
         if self.dry_run:
             return
-        for line in target.client.push(repository, tag, stream=True, decode=True):
-            if 'error' in line.keys():
-                message = line['errorDetail']['message']
-                raise ImagePushError(message=message)
-            self.log.debug(line)
+        try:
+            for line in target.client.push(repository, tag, stream=True, decode=True):
+                if 'error' in line.keys():
+                    message = line['errorDetail']['message']
+                    raise ImagePushError(message=message)
+                self.log.debug(line)
+        except ReadTimeoutError as e:
+            raise ImagePushError(message=e.message)
         return
 
     def process_images(self):
