@@ -11,7 +11,7 @@ from requests.auth import HTTPDigestAuth, HTTPBasicAuth
 from docker_registry_util import client
 from typing import Dict, List, Optional
 
-from urllib3.exceptions import TimeoutError
+from urllib3.exceptions import ReadTimeoutError
 
 LOG = logging.getLogger("publisher")
 LOG.setLevel(logging.DEBUG)
@@ -370,8 +370,8 @@ class ReleaseHelper(object):
                     message = line['errorDetail']['message']
                     raise ImagePushError(message=message)
                 self.log.debug(line)
-        except TimeoutError as e:
-            raise ImagePushError(message=e.message)
+        except ReadTimeoutError as e:
+            raise ImagePushError(message=str(e))
         return
 
     def process_images(self):
