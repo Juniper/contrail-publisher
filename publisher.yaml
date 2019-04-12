@@ -98,3 +98,9 @@ release_tags:
 # This allows us to define retry limit for pushing images. 
 # If the limit is reached for an image, the script will fail.
 retry_limit: 5
+
+# Number of threads that will process images.
+# If this parameter is missing, defaults to '1'.
+# A '0' value or value greater than the number of selected images
+# will result in creating one thread per image
+image_thread_count: 1

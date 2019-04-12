@@ -7,6 +7,7 @@ import logging
 import re
 import jinja2
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.auth import HTTPDigestAuth, HTTPBasicAuth
 from docker_registry_util import client
 from typing import Dict, List, Optional
@@ -161,6 +162,7 @@ class ReleaseHelper(object):
         self.source_tag_tpl = ""
         self.release_tags_tpl = {}
         self.retry_limit = 5
+        self.image_thread_count = 1
 
     def parse_arguments(self):
         parser = argparse.ArgumentParser()
@@ -212,6 +214,7 @@ class ReleaseHelper(object):
         self.retry_limit = config.get('retry_limit', self.retry_limit)
         self.image_overrides = config.get('image_overrides', {})
         self.release_overrides = config.get('release_overrides', {})
+        self.image_thread_count = config.get('image_thread_count', self.image_thread_count)
 
     def fetch_registry_content(self):
         """Fetch list of repositories from all source registries."""
@@ -378,30 +381,53 @@ class ReleaseHelper(object):
             raise ImagePushError(message=str(e))
         return
 
-    def process_images(self):
+    def _process_image(self, image):
+        self.fetch_image(image)
+
+        for target in image.push_registries:
+            for tag in image.release_tags:
+                repository = f'{target}/{image.repository.name}'
+                self.tag_image(image, repository, tag)
+                retry_count = 1
+                while retry_count <= self.retry_limit:
+                    self.log.info(f'Pushing {repository}:{tag} to'
+                                  f' {target} ({retry_count}/{self.retry_limit})')
+                    try:
+                        self.publish_image(target, repository, tag)
+                        break
+                    except ImagePushError as e:
+                        self.log.error(f'Failed {retry_count}/{self.retry_limit} attempt to push image {image}.'
+                                       f' Error: {e.message}')
+                        retry_count = retry_count + 1
+                else:
+                    return False
+        return True
+
+    def process_all_images(self):
         """Get a list of images to publish, tag them and push to registries"""
         source_images = self.get_build_images()
-        self.log.info("Got %s images for publishing. Processing..", len(source_images))
+        if self.image_thread_count == 0 or len(source_images) < self.image_thread_count:
+            thread_count = len(source_images)
+        else:
+            thread_count = self.image_thread_count
+        self.log.info(f'Got {len(source_images)} images for publishing.'
+                      f' Processing in {thread_count} threads.')
 
-        for image in source_images:
-            self.fetch_image(image)
+        thread_results = []
+        with ThreadPoolExecutor(max_workers=thread_count) as executor:
+            # Maping dict with keys as futures and images as values
+            future_to_image = {executor.submit(self._process_image, image): image for image in source_images}
+            for future in as_completed(future_to_image):
+                image = future_to_image[future]
+                try:
+                    thread_results.append(future.result())
+                except Exception as e:
+                    self.log.error(f'Error processing {image}. {e}')
+                    thread_results.append(False)
+                else:
+                    self.log.info(f'Image {image} processing finished. Result {thread_results[-1]}.')
 
-            for target in image.push_registries:
-                for tag in image.release_tags:
-                    repository = "%s/%s" % (target, image.repository.name)
-                    self.tag_image(image, repository, tag)
-                    retry_count = 1
-                    while retry_count <= self.retry_limit:
-                        self.log.info("Pushing %s:%s to %s (%d/%d)", repository, tag, target, retry_count, self.retry_limit)
-                        try:
-                            self.publish_image(target, repository, tag)
-                            break
-                        except ImagePushError as e:
-                            self.log.error("%s", e.message)
-                            retry_count = retry_count + 1
-                    else:
-                        return False
-        return True
+        return all(thread_results)
 
 
 def main():
@@ -411,7 +437,7 @@ def main():
     helper.parse_configuration()
     helper.fetch_registry_content()
 
-    push_succeeded = helper.process_images()
+    push_succeeded = helper.process_all_images()
     if not push_succeeded:
         helper.log.error("There were errors while pushing images. Aborting...")
         return 1
