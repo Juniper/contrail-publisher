@@ -139,7 +139,11 @@ class Registry(object):
         catalog = self.raw_client.get_catalog().json()
         self.log.info("Found the following repositories in registry %s:", self.name)
         for repo in catalog['repositories']:
-            tags = self.raw_client.get_tags(repo).json()['tags']
+            try:
+                tags = self.raw_client.get_tags(repo).json()['tags']
+            except HTTPError as e:
+                self.log.warning(f'Could not get tags for repository {repo} from registry {self}. {e}')
+                continue
             if tags is None:
                 tags = []
             self.log.debug("\t%s with %s tags", repo, len(tags))
