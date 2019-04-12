@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
 
-import argparse
-import docker
-import yaml
 import logging
-import re
-import jinja2
 
+from argparse import ArgumentParser
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from requests.auth import HTTPDigestAuth, HTTPBasicAuth
+from docker import APIClient as DockerAPIClient
 from docker_registry_util import client
+from jinja2 import Template
+from re import match as re_match
+from requests import HTTPError
+from requests.auth import HTTPBasicAuth
 from typing import Dict, List, Optional
-
 from urllib3.exceptions import ReadTimeoutError
+from yaml import safe_load as yaml_safe_load_file
 
-LOG = logging.getLogger("publisher")
+
+LOG = logging.getLogger('publisher')
 LOG.setLevel(logging.DEBUG)
 ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter('%(asctime)s - %(name)s - [%(thread)d] %(levelname)s - %(message)s')
 ch.setFormatter(formatter)
 LOG.addHandler(ch)
+
 
 class ImagePushError(Exception):
     def __init__(self, response=None, message=''):
@@ -32,19 +34,19 @@ class ImagePushError(Exception):
 class Image(object):
     def __init__(self, repository: 'Repository', tag: str, release_tags: List[str], push_registries: List['Registry']):
         self.repository = repository
-        self.tag:str = tag
+        self.tag: str = tag
         self.push_registries: List[Registry] = push_registries
         self.release_tags = release_tags
 
         for r in push_registries:
             if r.source:
-                raise RuntimeError("Registry %s is marked as 'source'. Can't push there." % (r,))
+                raise RuntimeError(f'Registry {r} is marked as "source". Cannot push there.')
 
-        if not self.tag in repository.tags:
-            raise RuntimeError("Tag %s missing from repository.", tag)
+        if self.tag not in repository.tags:
+            raise RuntimeError(f'Tag {tag} missing from repository.')
 
     def __str__(self):
-        return str(self.repository) + ":" + self.tag
+        return str(self.repository) + ':' + self.tag
     __repr__ = __str__
 
 
@@ -59,24 +61,24 @@ class Repository(object):
     def __str__(self):
         repository = self.registry.url
         if self.namespace:
-            repository += "/" + self.namespace
-        repository += "/" + self.name
+            repository += '/' + self.namespace
+        repository += '/' + self.name
 
         return repository
     __repr__ = __str__
 
 
 class Registry(object):
-    def __init__(self, config : dict):
-        self.log = logging.getLogger("helper.Registry")
+    def __init__(self, config: dict):
+        self.log = logging.getLogger('helper.Registry')
         self.log.setLevel(logging.DEBUG)
 
         self.name: str = config['name']
         self.url: str = config['url']
         self.catalog: Dict[str] = None
-        self.repositories : Dict[Repository] = {}
+        self.repositories: Dict[Repository] = {}
         self.token = None
-        self.client = docker.APIClient(base_url='unix://var/run/docker.sock')
+        self.client = DockerAPIClient(base_url='unix://var/run/docker.sock')
 
         if 'source' in config:
             self.source = config['source']
@@ -128,17 +130,17 @@ class Registry(object):
             auth = HTTPBasicAuth(self.credentials['username'], self.credentials['password'])
         else:
             auth = None
-        base_url = "http://" if self.untrusted else "https://"
+        base_url = 'http://' if self.untrusted else 'https://'
         base_url += self.url
         self.raw_client = client.DockerRegistryClient(base_url=base_url, auth=auth)
 
     def get_repositories(self) -> None:
         """This method fetches all repositories from the registry."""
 
-        self.log.info("Fetching repositories for %s", self.name)
+        self.log.info(f'Fetching repositories for {self.name}')
 
         catalog = self.raw_client.get_catalog().json()
-        self.log.info("Found the following repositories in registry %s:", self.name)
+        self.log.info(f'Found the following repositories in registry {self.name}: {catalog}')
         for repo in catalog['repositories']:
             try:
                 tags = self.raw_client.get_tags(repo).json()['tags']
@@ -147,7 +149,7 @@ class Registry(object):
                 continue
             if tags is None:
                 tags = []
-            self.log.debug("\t%s with %s tags", repo, len(tags))
+            self.log.debug(f'\t{repo} with {len(tags)} tags')
             self.repositories[repo] = Repository(name=repo, registry=self, tags=tags)
             self.log.info(self.repositories[repo])
 
@@ -156,7 +158,7 @@ class ReleaseHelper(object):
     def __init__(self):
         # command line global arguments
         self.verbose = False
-        self.registries : Dict[Registry] = {}
+        self.registries: Dict[str] = {}
         self.registry_images = {}
         self.image_overrides = {}
         self.source_tag_tpl = ""
@@ -165,16 +167,16 @@ class ReleaseHelper(object):
         self.image_thread_count = 1
 
     def parse_arguments(self):
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--verbose", dest="verbose", action="store_true")
-        parser.add_argument("--release", dest="release", required=True)
-        parser.add_argument("--openstack_release", dest="openstack_release", default="ocata")
-        parser.add_argument("--build-registry", dest="build_registry", default=None)
-        parser.add_argument("--build", dest="build_no", required=True)
-        parser.add_argument("--dry-run", dest="dry_run", action="store_true")
-        parser.add_argument("--config", dest="config", default="publisher.yaml")
-        parser.add_argument("--filter", dest="images_filter", default=None)
-        parser.add_argument("--retry-limit", dest="retry_limit", default=self.retry_limit)
+        parser = ArgumentParser()
+        parser.add_argument('--verbose', dest='verbose', action='store_true')
+        parser.add_argument('--release', dest='release', required=True)
+        parser.add_argument('--openstack_release', dest='openstack_release', default='ocata')
+        parser.add_argument('--build-registry', dest='build_registry', default=None)
+        parser.add_argument('--build', dest='build_no', required=True)
+        parser.add_argument('--dry-run', dest='dry_run', action='store_true')
+        parser.add_argument('--config', dest='config', default='publisher.yaml')
+        parser.add_argument('--filter', dest='images_filter', default=None)
+        parser.add_argument('--retry-limit', dest='retry_limit', default=self.retry_limit)
         args = parser.parse_args()
 
         self.verbose = args.verbose
@@ -188,18 +190,18 @@ class ReleaseHelper(object):
         self.retry_limit = args.retry_limit
 
     def configure_logging(self):
-        self.log = logging.getLogger("publish.ReleaseHelper")
+        self.log = logging.getLogger('publish.ReleaseHelper')
         if self.verbose:
             self.log.setLevel(logging.DEBUG)
         else:
             self.log.setLevel(logging.INFO)
-        loggingHandler = logging.StreamHandler()
-        loggingHandler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
-        self.log.addHandler(loggingHandler)
+        logging_handler = logging.StreamHandler()
+        logging_handler.setFormatter(logging.Formatter('[%(thread)d] %(levelname)s: %(message)s'))
+        self.log.addHandler(logging_handler)
 
     def parse_configuration(self):
         with open(self.config) as fh:
-            config = yaml.safe_load(fh)
+            config = yaml_safe_load_file(fh)
 
         for config_reg in config['registries']:
             if config_reg['name'] == 'build' and self.build_registry:
@@ -242,13 +244,13 @@ class ReleaseHelper(object):
         repository: Repository
         images = []
         for repository in registry.repositories.values():
-            if self.images_filter and not repository.name in self.images_filter:
+            if self.images_filter and repository.name not in self.images_filter:
                 continue
 
             for tag in repository.tags:
                 image = self.get_matching_image_from_repository(repository, tag)
                 if image:
-                    self.log.info("Image %s found", image)
+                    self.log.info(f'Image {image} found')
                     images += [image]
 
         return images
@@ -271,56 +273,56 @@ class ReleaseHelper(object):
         override = {}
         # apply any per-image overrides
         for candidate in self.image_overrides:
-            if "image_matcher" in candidate:
-                matcher = candidate["image_matcher"]
-                if not re.match(matcher, repo.name):
+            if 'image_matcher' in candidate:
+                matcher = candidate['image_matcher']
+                if not re_match(matcher, repo.name):
                     continue
-            if "tag_matcher" in candidate:
-                matcher = candidate["tag_matcher"]
-                if not re.match(matcher, tag):
+            if 'tag_matcher' in candidate:
+                matcher = candidate['tag_matcher']
+                if not re_match(matcher, tag):
                     continue
-            #self.log.warning("Overrides for %s:%s found.", repo, tag)
+            # self.log.warning(f'Overrides for {repo}:{tag} found.')
             override = candidate
             break
 
-        if "source_tag" in override:
+        if 'source_tag' in override:
             source_tag_tpl = override['source_tag']
 
-        if "distribution" in override:
-            distribution = override["distribution"]
+        if 'distribution' in override:
+            distribution = override['distribution']
 
-        if "registries" in override:
-            registry_names = override["registries"]
+        if 'registries' in override:
+            registry_names = override['registries']
             registries = [r for r in self.registries.values() if r.name in registry_names]
 
-        if "release_tags" in override:
-            release_tags_tpl = override["release_tags"]
+        if 'release_tags' in override:
+            release_tags_tpl = override['release_tags']
 
         # image overrides explicitly disabled processing.
         if not registries:
-            self.log.info("Image %s:%s disabled.", repo, tag)
+            self.log.info(f'Image {repo}:{tag} disabled.')
             return
 
         source_tag_context = {
-            "openstack_release_lhs": openstack_release + "-",
-            "openstack_release_rhs": "-" + openstack_release,
-            "distribution_lhs": distribution + "-",
-            "distribution_rhs": "-" + distribution,
-            "release": self.release,
-            "build_no": self.build_no,
+            'openstack_release_lhs': openstack_release + '-',
+            'openstack_release_rhs': '-' + openstack_release,
+            'distribution_lhs': distribution + '-',
+            'distribution_rhs': '-' + distribution,
+            'release': self.release,
+            'build_no': self.build_no,
         }
 
         release_tag_context = {
-            "openstack_release_lhs": openstack_release + "-",
-            "openstack_release_rhs": "-" + openstack_release,
-            "distribution_lhs": distribution + "-",
-            "distribution_rhs": "-" + distribution,
-            "release": self.get_release(),
-            "build_no": self.get_build_no(),
+            'openstack_release_lhs': openstack_release + '-',
+            'openstack_release_rhs': '-' + openstack_release,
+            'distribution_lhs': distribution + '-',
+            'distribution_rhs': '-' + distribution,
+            'release': self.get_release(),
+            'build_no': self.get_build_no(),
         }
 
         def render_tag(template, context):
-            template = jinja2.Template(template)
+            template = Template(template)
             return template.render(context)
 
         source_tag = render_tag(source_tag_tpl, source_tag_context)
@@ -329,7 +331,7 @@ class ReleaseHelper(object):
         # This method is called for every tag in repository, but we want to process only images that
         # match requested release, build_no and openstack version.
         if source_tag == tag:
-            image =  Image(repository=repo, tag=source_tag, release_tags=release_tags, push_registries=registries)
+            image = Image(repository=repo, tag=source_tag, release_tags=release_tags, push_registries=registries)
             return image
         else:
             return None
@@ -341,7 +343,6 @@ class ReleaseHelper(object):
         of the release. An exception is raised if the same image is in more than one registry.
         """
         images = []
-        image_names = []
         conflicting_names = []
         for registry_name, registry in self.registries.items():
             # if the registry is not marked as source, skip it
@@ -351,7 +352,7 @@ class ReleaseHelper(object):
             images += self.get_images_from_registry(registry)
 
         if conflicting_names:
-            raise RuntimeError("Images found in multiple 'source' repositories: %s", conflicting_names)
+            raise RuntimeError(f'Images found in multiple source repositories: {conflicting_names}')
 
         return images
 
@@ -360,12 +361,12 @@ class ReleaseHelper(object):
 
         Each `Registry` has its own client so we just access it directly.
         """
-        self.log.info("Fetching image %s", image)
+        self.log.info(f'Fetching image {image}')
         for line in image.repository.registry.client.pull(str(image.repository), image.tag, stream=True, decode=True):
             self.log.debug(line)
 
     def tag_image(self, image: Image, target_repository: Repository, tag: str):
-        self.log.info("Tagging %s for %s:%s", image, target_repository, tag)
+        self.log.info(f'Tagging {image} for {target_repository}:{tag}')
         image.repository.registry.client.tag(str(image), str(target_repository), tag)
 
     def publish_image(self, target: Registry, repository: str, tag: str):
@@ -439,11 +440,11 @@ def main():
 
     push_succeeded = helper.process_all_images()
     if not push_succeeded:
-        helper.log.error("There were errors while pushing images. Aborting...")
+        helper.log.error('There were errors while pushing images. Aborting...')
         return 1
-    helper.log.info("Publishing completed successfully")
+    helper.log.info('Publishing completed successfully')
     return 0
-        
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     exit(main())
