@@ -55,6 +55,19 @@ image_overrides:
     distribution: rhel
     source_tag: "{{ distribution_lhs }}{{ openstack_release_lhs }}{{ release }}-{{ build_no }}"
 
+  # RHEL images matcher for private images without SKU
+  - image_matcher: ^.*$
+    tag_matcher: ^rhel-.*$
+    registries:
+      - registry-auth
+    # we can change how the published container is to be tagged.
+    release_tags:
+      # rhel-5.0.0-0.27 and rhel-5.0.0-0.27-ocata
+      - "rhel-{{ release }}-0.{{ build_no }}"
+      - "rhel-{{ release }}-0.{{ build_no }}{{ openstack_release_rhs }}"
+    distribution: rhel
+    source_tag: "{{ distribution_lhs }}{{ release }}-{{ build_no }}"
+
   # contrail-go is pushed with {{ release }}-{{ build_no }}
   - image_matcher: contrail-go
     source_tag: "{{ release }}-{{ build_no }}"
