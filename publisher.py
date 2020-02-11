@@ -132,7 +132,8 @@ class Registry(object):
             auth = None
         base_url = 'http://' if self.untrusted else 'https://'
         base_url += self.url
-        self.raw_client = client.DockerRegistryClient(base_url=base_url, auth=auth)
+        headers = {        'content-type': 'text/plain',    }
+        self.raw_client = client.DockerRegistryClient(base_url=base_url, auth=auth, headers=headers)
 
     def get_repositories(self) -> None:
         """This method fetches all repositories from the registry."""
@@ -362,12 +363,16 @@ class ReleaseHelper(object):
         Each `Registry` has its own client so we just access it directly.
         """
         self.log.info(f'Fetching image {image}')
-        for line in image.repository.registry.client.pull(str(image.repository), image.tag, stream=True, decode=True):
+        imagerepo = str(image.repository)
+        imagerepo = imagerepo.replace('artifactory/api/docker/', '')
+        for line in image.repository.registry.client.pull(imagerepo, image.tag, stream=True, decode=True):
             self.log.debug(line)
 
     def tag_image(self, image: Image, target_repository: Repository, tag: str):
         self.log.info(f'Tagging {image} for {target_repository}:{tag}')
-        image.repository.registry.client.tag(str(image), str(target_repository), tag)
+        imagetag = str(image)
+        imagetag = imagetag.replace('artifactory/api/docker/', '')
+        image.repository.registry.client.tag(imagetag, str(target_repository), tag)
 
     def publish_image(self, target: Registry, repository: str, tag: str):
         if self.dry_run:
