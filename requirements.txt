@@ -7,7 +7,7 @@ entrypoints==0.3
 flake8==3.7.7
 flake8-colors==0.1.6
 idna==2.8
-Jinja2==2.10
+Jinja2==2.11.3
 MarkupSafe==1.1.1
 pycodestyle==2.5.0
 pyflakes==2.1.1
